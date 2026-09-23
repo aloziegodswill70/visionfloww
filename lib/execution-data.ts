@@ -1,0 +1,32 @@
+export const workflowExecutions = [
+  {
+    id: "exec_1",
+    clinicId: "clinic_justvision",
+    workflowName: "Appointment Reminder",
+    patientName: "Ada Johnson",
+    action: "send_whatsapp",
+    status: "success",
+    message: "Appointment reminder sent successfully.",
+    time: "9:42 AM",
+  },
+  {
+    id: "exec_2",
+    clinicId: "clinic_justvision",
+    workflowName: "Glasses Ready Alert",
+    patientName: "Mary Peters",
+    action: "send_whatsapp",
+    status: "success",
+    message: "Glasses pickup notification sent.",
+    time: "10:15 AM",
+  },
+  {
+    id: "exec_3",
+    clinicId: "clinic_justvision",
+    workflowName: "Review Request",
+    patientName: "Chinedu Okafor",
+    action: "send_whatsapp",
+    status: "pending",
+    message: "Review request queued.",
+    time: "11:05 AM",
+  },
+];

@@ -1,0 +1,93 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: #f8fafc;
+  --foreground: #0f172a;
+  --primary: #0284c7;
+  --whatsapp: #25d366;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+@layer components {
+  .app-shell {
+    @apply min-h-screen bg-clinic-soft text-clinic-dark;
+  }
+
+  .section-padding {
+    @apply px-4 sm:px-6 lg:px-8;
+  }
+
+  .card {
+    @apply rounded-card border border-slate-200 bg-white shadow-soft;
+  }
+
+  .card-padding {
+    @apply p-5 md:p-6;
+  }
+
+  .dashboard-title {
+    @apply text-2xl md:text-3xl font-bold text-slate-950;
+  }
+
+  .dashboard-subtitle {
+    @apply text-sm md:text-base text-slate-500 mt-1;
+  }
+
+  .btn-primary {
+    @apply inline-flex items-center justify-center rounded-xl bg-clinic-blue px-4 py-2.5 text-sm font-semibold text-white hover:bg-sky-700 transition;
+  }
+
+  .btn-whatsapp {
+    @apply inline-flex items-center justify-center rounded-xl bg-clinic-whatsapp px-4 py-2.5 text-sm font-semibold text-white hover:opacity-90 transition;
+  }
+
+  .btn-soft {
+    @apply inline-flex items-center justify-center rounded-xl bg-slate-100 px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-200 transition;
+  }
+
+  .input-field {
+    @apply w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-clinic-blue focus:ring-4 focus:ring-sky-100;
+  }
+
+  .badge-success {
+    @apply rounded-full bg-green-100 px-3 py-1 text-xs font-medium text-green-700;
+  }
+
+  .badge-warning {
+    @apply rounded-full bg-yellow-100 px-3 py-1 text-xs font-medium text-yellow-700;
+  }
+
+  .badge-danger {
+    @apply rounded-full bg-red-100 px-3 py-1 text-xs font-medium text-red-700;
+  }
+
+  .badge-info {
+    @apply rounded-full bg-sky-100 px-3 py-1 text-xs font-medium text-sky-700;
+  }
+}

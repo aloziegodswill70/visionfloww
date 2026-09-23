@@ -1,0 +1,533 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/**
+ * =========================================================
+ * CLINIC
+ * =========================================================
+ */
+
+model Clinic {
+  id String @id @default(cuid())
+
+  name String
+  slug String @unique
+
+  email String?
+  phone String?
+
+  plan               String @default("Starter")
+  subscriptionStatus String @default("trial")
+
+  openingHour String @default("08:00")
+  closingHour String @default("18:00")
+
+  workingDays String[] @default(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"])
+
+  isActive Boolean @default(true)
+
+  ownerId String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  owner User? @relation("ClinicOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+
+  users User[]
+
+  branches Branch[]
+
+  patients Patient[]
+
+  appointments Appointment[]
+
+  whatsappAccounts WhatsAppAccount[]
+
+  whatsappMessages WhatsAppMessage[]
+
+  opticalOrders OpticalOrder[]
+
+  medicationReminders MedicationReminder[]
+
+  followUpReminders FollowUpReminder[]
+
+  executionLogs ExecutionLog[]
+
+  auditLogs AuditLog[]
+}
+
+/**
+ * =========================================================
+ * BRANCH
+ * =========================================================
+ */
+
+model Branch {
+  id String @id @default(cuid())
+
+  clinicId String
+
+  name    String
+  address String?
+  phone   String?
+
+  isMain   Boolean @default(false)
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  users User[]
+
+  patients Patient[]
+
+  appointments Appointment[]
+
+  whatsappAccounts WhatsAppAccount[]
+
+  whatsappMessages WhatsAppMessage[]
+
+  opticalOrders OpticalOrder[]
+
+  medicationReminders MedicationReminder[]
+
+  followUpReminders FollowUpReminder[]
+
+  @@unique([clinicId, name])
+  @@index([clinicId])
+}
+
+/**
+ * =========================================================
+ * USER
+ * =========================================================
+ */
+
+model User {
+  id String @id @default(cuid())
+
+  clinicId String?
+  branchId String?
+
+  fullName String
+
+  email    String @unique
+  password String
+
+  role UserRole
+
+  status String @default("active")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  clinic Clinic? @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  branch Branch? @relation(fields: [branchId], references: [id], onDelete: SetNull)
+
+  ownedClinic Clinic? @relation("ClinicOwner")
+
+  auditLogs AuditLog[]
+
+  @@index([clinicId])
+  @@index([branchId])
+  @@index([clinicId, branchId])
+}
+
+/**
+ * =========================================================
+ * PATIENT
+ * =========================================================
+ */
+
+model Patient {
+  id String @id @default(cuid())
+
+  clinicId String
+  branchId String?
+
+  fullName String
+  phone    String
+
+  gender String?
+
+  status String @default("Active")
+
+  lastVisit String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  branch Branch? @relation(fields: [branchId], references: [id], onDelete: SetNull)
+
+  appointments Appointment[]
+
+  whatsappMessages WhatsAppMessage[]
+
+  opticalOrders OpticalOrder[]
+
+  medicationReminders MedicationReminder[]
+
+  followUpReminders FollowUpReminder[]
+
+  @@index([clinicId])
+  @@index([branchId])
+  @@index([clinicId, phone])
+}
+
+/**
+ * =========================================================
+ * APPOINTMENT
+ * =========================================================
+ */
+
+model Appointment {
+  id String @id @default(cuid())
+
+  clinicId  String
+  branchId  String
+  patientId String?
+
+  patientName String
+  phone       String
+  reason      String
+
+  date String
+  time String
+
+  notes String?
+
+  status AppointmentStatus @default(PENDING_RECEPTION_CONFIRMATION)
+
+  patientConfirmed      Boolean @default(false)
+  receptionistConfirmed Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Restrict)
+
+  patient Patient? @relation(fields: [patientId], references: [id], onDelete: SetNull)
+
+  @@index([clinicId])
+  @@index([branchId])
+  @@index([patientId])
+  @@index([clinicId, date])
+  @@index([clinicId, status])
+  @@index([clinicId, patientId])
+}
+
+/**
+ * =========================================================
+ * WHATSAPP ACCOUNT
+ * =========================================================
+ */
+
+model WhatsAppAccount {
+  id String @id @default(cuid())
+
+  clinicId String
+  branchId String?
+
+  provider String @default("meta_cloud_api")
+
+  phoneNumber String?
+  displayName String?
+
+  phoneNumberId     String? @unique
+  businessAccountId String?
+
+  /**
+   * Store encrypted access token.
+   * Never store the raw Meta access token.
+   */
+  accessTokenEncrypted String?
+
+  /**
+   * Store hashed webhook verification token.
+   */
+  verifyTokenHash String?
+
+  status String @default("pending")
+
+  lastConnectedAt DateTime?
+  lastWebhookAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  branch Branch? @relation(fields: [branchId], references: [id], onDelete: SetNull)
+
+  messages WhatsAppMessage[]
+
+  @@index([clinicId])
+  @@index([branchId])
+}
+
+/**
+ * =========================================================
+ * WHATSAPP MESSAGE
+ * =========================================================
+ */
+
+model WhatsAppMessage {
+  id String @id @default(cuid())
+
+  clinicId          String
+  branchId          String?
+  patientId         String?
+  whatsappAccountId String?
+
+  patientName String?
+  phone       String?
+
+  direction String
+
+  text String
+
+  status String @default("received")
+
+  intent String?
+
+  messageId String?
+
+  createdAt DateTime @default(now())
+
+  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  branch Branch? @relation(fields: [branchId], references: [id], onDelete: SetNull)
+
+  patient Patient? @relation(fields: [patientId], references: [id], onDelete: SetNull)
+
+  whatsappAccount WhatsAppAccount? @relation(fields: [whatsappAccountId], references: [id], onDelete: SetNull)
+
+  @@index([clinicId])
+  @@index([branchId])
+  @@index([patientId])
+  @@index([whatsappAccountId])
+  @@index([clinicId, createdAt])
+  @@index([clinicId, patientId])
+}
+
+/**
+ * =========================================================
+ * OPTICAL ORDER
+ * =========================================================
+ */
+
+model OpticalOrder {
+  id String @id @default(cuid())
+
+  clinicId  String
+  branchId  String
+  patientId String?
+
+  patientName String
+  lensType    String
+
+  status String @default("Processing")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Restrict)
+
+  patient Patient? @relation(fields: [patientId], references: [id], onDelete: SetNull)
+
+  @@index([clinicId])
+  @@index([branchId])
+  @@index([patientId])
+  @@index([clinicId, patientId])
+}
+
+/**
+ * =========================================================
+ * MEDICATION REMINDER
+ * =========================================================
+ */
+
+model MedicationReminder {
+  id String @id @default(cuid())
+
+  clinicId  String
+  branchId  String
+  patientId String?
+
+  patientName String
+
+  medicationName    String
+  dosageInstruction String
+  frequency         String
+
+  reminderTime String
+
+  startDate String
+  endDate   String
+
+  status ReminderStatus @default(SCHEDULED)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Restrict)
+
+  patient Patient? @relation(fields: [patientId], references: [id], onDelete: SetNull)
+
+  @@index([clinicId])
+  @@index([branchId])
+  @@index([patientId])
+  @@index([clinicId, patientId])
+}
+
+/**
+ * =========================================================
+ * FOLLOW-UP REMINDER
+ * =========================================================
+ */
+
+model FollowUpReminder {
+  id String @id @default(cuid())
+
+  clinicId  String
+  branchId  String
+  patientId String?
+
+  patientName String
+
+  followUpDate String
+  followUpTime String
+
+  reason String
+
+  reminderSchedule String[]
+
+  status ReminderStatus @default(SCHEDULED)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Restrict)
+
+  patient Patient? @relation(fields: [patientId], references: [id], onDelete: SetNull)
+
+  @@index([clinicId])
+  @@index([branchId])
+  @@index([patientId])
+  @@index([clinicId, patientId])
+}
+
+/**
+ * =========================================================
+ * EXECUTION LOG
+ * =========================================================
+ */
+
+model ExecutionLog {
+  id String @id @default(cuid())
+
+  clinicId String
+
+  workflowName String
+
+  patientName String?
+
+  action String
+
+  status String
+
+  message String
+
+  createdAt DateTime @default(now())
+
+  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@index([clinicId])
+  @@index([clinicId, createdAt])
+}
+
+/**
+ * =========================================================
+ * AUDIT LOG
+ * =========================================================
+ */
+
+model AuditLog {
+  id String @id @default(cuid())
+
+  clinicId String?
+  userId   String?
+
+  action   String
+  entity   String
+  entityId String?
+
+  description String?
+
+  ipAddress String?
+  userAgent String?
+
+  createdAt DateTime @default(now())
+
+  clinic Clinic? @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([clinicId])
+  @@index([userId])
+  @@index([createdAt])
+}
+
+/**
+ * =========================================================
+ * ENUMS
+ * =========================================================
+ */
+
+enum UserRole {
+  SUPER_ADMIN
+  CLINIC_ADMIN
+  DOCTOR
+  RECEPTIONIST
+  OPTICIAN
+  ACCOUNTANT
+  MANAGER
+}
+
+enum AppointmentStatus {
+  PENDING_RECEPTION_CONFIRMATION
+  RECEPTION_CONFIRMED
+  PATIENT_CONFIRMED
+  CHECKED_IN
+  IN_CONSULTATION
+  COMPLETED
+  CANCELLED
+  MISSED
+  RESCHEDULED
+}
+
+enum ReminderStatus {
+  SCHEDULED
+  SENT
+  FAILED
+  CANCELLED
+}
