@@ -33,6 +33,13 @@ type Branch = {
   name: string;
 };
 
+type Patient = {
+  id: string;
+  fullName: string;
+  phone: string;
+  branchId?: string | null;
+};
+
 /**
  * ==========================================
  * STATUS LABELS
@@ -71,10 +78,6 @@ const statusLabels: Record<AppointmentStatus, string> = {
  * ==========================================
  * ALLOWED NEXT ACTIONS
  * ==========================================
- *
- * This mirrors the server-side workflow.
- *
- * The backend remains the final authority.
  */
 const allowedTransitions: Record<
   AppointmentStatus,
@@ -200,7 +203,13 @@ export default function AppointmentsPage() {
   const [branches, setBranches] =
     useState<Branch[]>([]);
 
+  const [patients, setPatients] =
+    useState<Patient[]>([]);
+
   const [loading, setLoading] =
+    useState(false);
+
+  const [patientsLoading, setPatientsLoading] =
     useState(false);
 
   const [search, setSearch] =
@@ -213,6 +222,7 @@ export default function AppointmentsPage() {
     useState<string | null>(null);
 
   const [form, setForm] = useState({
+    patientId: "",
     patientName: "",
     phone: "",
     reason: "",
@@ -289,10 +299,6 @@ export default function AppointmentsPage() {
 
       setBranches(list);
 
-      /**
-       * Default to the first available
-       * branch when creating an appointment.
-       */
       if (list.length > 0) {
         setForm((prev) => ({
           ...prev,
@@ -310,13 +316,107 @@ export default function AppointmentsPage() {
 
   /**
    * ==========================================
+   * FETCH PATIENTS
+   * ==========================================
+   */
+  const fetchPatients = async () => {
+    try {
+      setPatientsLoading(true);
+
+      const res = await fetch(
+        "/api/patients"
+      );
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        alert(
+          data.error ||
+            "Failed to fetch patients."
+        );
+
+        return;
+      }
+
+      setPatients(
+        data.patients || []
+      );
+    } catch (error) {
+      console.error(
+        "Fetch patients error:",
+        error
+      );
+
+      alert(
+        "Failed to load patients."
+      );
+    } finally {
+      setPatientsLoading(false);
+    }
+  };
+
+  /**
+   * ==========================================
    * INITIAL LOAD
    * ==========================================
    */
   useEffect(() => {
     fetchAppointments();
     fetchBranches();
+    fetchPatients();
   }, []);
+
+  /**
+   * ==========================================
+   * SELECT PATIENT
+   * ==========================================
+   */
+  const handlePatientChange = (
+    patientId: string
+  ) => {
+    const patient = patients.find(
+      (item) => item.id === patientId
+    );
+
+    if (!patient) {
+      setForm((prev) => ({
+        ...prev,
+        patientId: "",
+        patientName: "",
+        phone: "",
+      }));
+
+      return;
+    }
+
+    setForm((prev) => ({
+      ...prev,
+      patientId: patient.id,
+      patientName: patient.fullName,
+      phone: patient.phone,
+    }));
+  };
+
+  /**
+   * ==========================================
+   * PATIENTS AVAILABLE FOR SELECTED BRANCH
+   * ==========================================
+   */
+  const availablePatients =
+    patients.filter((patient) => {
+      if (!form.branchId) {
+        return true;
+      }
+
+      if (!patient.branchId) {
+        return true;
+      }
+
+      return (
+        patient.branchId ===
+        form.branchId
+      );
+    });
 
   /**
    * ==========================================
@@ -325,6 +425,7 @@ export default function AppointmentsPage() {
    */
   const createAppointment = async () => {
     if (
+      !form.patientId ||
       !form.patientName.trim() ||
       !form.phone.trim() ||
       !form.reason.trim() ||
@@ -333,7 +434,7 @@ export default function AppointmentsPage() {
       !form.branchId
     ) {
       alert(
-        "All appointment fields are required."
+        "Please select a patient and complete all appointment fields."
       );
 
       return;
@@ -350,7 +451,15 @@ export default function AppointmentsPage() {
               "application/json",
           },
 
-          body: JSON.stringify(form),
+          body: JSON.stringify({
+            patientId: form.patientId,
+            patientName: form.patientName,
+            phone: form.phone,
+            reason: form.reason,
+            date: form.date,
+            time: form.time,
+            branchId: form.branchId,
+          }),
         }
       );
 
@@ -372,6 +481,7 @@ export default function AppointmentsPage() {
       setForm((prev) => ({
         ...prev,
 
+        patientId: "",
         patientName: "",
         phone: "",
         reason: "",
@@ -400,9 +510,21 @@ export default function AppointmentsPage() {
   const startEdit = (
     appointment: Appointment
   ) => {
+    const matchingPatient =
+      patients.find(
+        (patient) =>
+          patient.fullName ===
+            appointment.patientName &&
+          patient.phone ===
+            appointment.phone
+      );
+
     setEditingId(appointment.id);
 
     setForm({
+      patientId:
+        matchingPatient?.id || "",
+
       patientName:
         appointment.patientName,
 
@@ -458,7 +580,17 @@ export default function AppointmentsPage() {
               "application/json",
           },
 
-          body: JSON.stringify(form),
+          body: JSON.stringify({
+            patientId:
+              form.patientId || undefined,
+            patientName:
+              form.patientName,
+            phone: form.phone,
+            reason: form.reason,
+            date: form.date,
+            time: form.time,
+            branchId: form.branchId,
+          }),
         }
       );
 
@@ -480,6 +612,7 @@ export default function AppointmentsPage() {
       setEditingId(null);
 
       setForm({
+        patientId: "",
         patientName: "",
         phone: "",
         reason: "",
@@ -615,6 +748,7 @@ export default function AppointmentsPage() {
     setEditingId(null);
 
     setForm({
+      patientId: "",
       patientName: "",
       phone: "",
       reason: "",
@@ -729,31 +863,49 @@ export default function AppointmentsPage() {
             gap: 14,
           }}
         >
-          <input
-            placeholder="Patient Name"
-            value={form.patientName}
+          {/* PATIENT */}
+          <select
+            value={form.patientId}
             onChange={(e) =>
-              setForm({
-                ...form,
-                patientName:
-                  e.target.value,
-              })
+              handlePatientChange(
+                e.target.value
+              )
             }
             style={inputStyle}
-          />
+          >
+            <option value="">
+              {patientsLoading
+                ? "Loading patients..."
+                : "Select Patient"}
+            </option>
 
+            {availablePatients.map(
+              (patient) => (
+                <option
+                  key={patient.id}
+                  value={patient.id}
+                >
+                  {patient.fullName}
+                  {patient.phone
+                    ? ` — ${patient.phone}`
+                    : ""}
+                </option>
+              )
+            )}
+          </select>
+
+          {/* PHONE */}
           <input
             placeholder="Phone Number"
             value={form.phone}
-            onChange={(e) =>
-              setForm({
-                ...form,
-                phone: e.target.value,
-              })
-            }
-            style={inputStyle}
+            readOnly
+            style={{
+              ...inputStyle,
+              background: "#f9fafb",
+            }}
           />
 
+          {/* REASON */}
           <input
             placeholder="Reason for Visit"
             value={form.reason}
@@ -767,6 +919,7 @@ export default function AppointmentsPage() {
             style={inputStyle}
           />
 
+          {/* DATE */}
           <input
             type="date"
             value={form.date}
@@ -779,6 +932,7 @@ export default function AppointmentsPage() {
             style={inputStyle}
           />
 
+          {/* TIME */}
           <input
             type="time"
             value={form.time}
@@ -791,15 +945,21 @@ export default function AppointmentsPage() {
             style={inputStyle}
           />
 
+          {/* BRANCH */}
           <select
             value={form.branchId}
-            onChange={(e) =>
-              setForm({
-                ...form,
-                branchId:
-                  e.target.value,
-              })
-            }
+            onChange={(e) => {
+              const branchId =
+                e.target.value;
+
+              setForm((prev) => ({
+                ...prev,
+                branchId,
+                patientId: "",
+                patientName: "",
+                phone: "",
+              }));
+            }}
             style={inputStyle}
           >
             <option value="">
@@ -818,6 +978,69 @@ export default function AppointmentsPage() {
             )}
           </select>
         </div>
+
+        {/* SELECTED PATIENT INFORMATION */}
+        {form.patientId && (
+          <div
+            style={{
+              marginTop: 14,
+              padding: 12,
+              borderRadius: 8,
+              background: "#f0fdf4",
+              border:
+                "1px solid #bbf7d0",
+              color: "#166534",
+              fontSize: 14,
+            }}
+          >
+            Selected patient:{" "}
+            <strong>
+              {form.patientName}
+            </strong>
+          </div>
+        )}
+
+        {!patientsLoading &&
+          patients.length === 0 && (
+            <div
+              style={{
+                marginTop: 14,
+                padding: 12,
+                borderRadius: 8,
+                background: "#fff7ed",
+                border:
+                  "1px solid #fed7aa",
+                color: "#9a3412",
+                fontSize: 14,
+              }}
+            >
+              No registered patients were
+              found. Please create a patient
+              first before creating an
+              appointment.
+            </div>
+          )}
+
+        {!patientsLoading &&
+          patients.length > 0 &&
+          availablePatients.length ===
+            0 && (
+            <div
+              style={{
+                marginTop: 14,
+                padding: 12,
+                borderRadius: 8,
+                background: "#fff7ed",
+                border:
+                  "1px solid #fed7aa",
+                color: "#9a3412",
+                fontSize: 14,
+              }}
+            >
+              No patients are available for
+              the selected branch.
+            </div>
+          )}
 
         <div
           style={{
@@ -1420,3 +1643,4 @@ const tableCellStyle: React.CSSProperties = {
   fontSize: 14,
   color: "#374151",
 };
+

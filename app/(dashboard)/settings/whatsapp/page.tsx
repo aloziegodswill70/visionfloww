@@ -1,3 +1,4 @@
+
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
@@ -10,6 +11,8 @@ import {
   ShieldCheck,
   Trash2,
   XCircle,
+  KeyRound,
+  X,
 } from "lucide-react";
 
 type WhatsAppAccount = {
@@ -42,6 +45,10 @@ export default function WhatsAppSettingsPage() {
   const [phoneNumber, setPhoneNumber] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [branchId, setBranchId] = useState("");
+
+  const [editingAccountId, setEditingAccountId] = useState<string | null>(
+    null
+  );
 
   const [loading, setLoading] = useState(true);
   const [connecting, setConnecting] = useState(false);
@@ -95,6 +102,35 @@ export default function WhatsAppSettingsPage() {
     loadData();
   }, []);
 
+  function resetForm() {
+    setPhoneNumberId("");
+    setBusinessAccountId("");
+    setAccessToken("");
+    setPhoneNumber("");
+    setDisplayName("");
+    setBranchId("");
+    setEditingAccountId(null);
+  }
+
+  function handleEditAccount(account: WhatsAppAccount) {
+    setMessage("");
+    setError("");
+
+    setEditingAccountId(account.id);
+
+    setPhoneNumberId(account.phoneNumberId || "");
+    setBusinessAccountId(account.businessAccountId || "");
+    setAccessToken("");
+    setPhoneNumber(account.phoneNumber || "");
+    setDisplayName(account.displayName || "");
+    setBranchId(account.branchId || "");
+
+    window.scrollTo({
+      top: 0,
+      behavior: "smooth",
+    });
+  }
+
   async function handleConnect(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -108,7 +144,11 @@ export default function WhatsAppSettingsPage() {
       }
 
       if (!accessToken.trim()) {
-        throw new Error("Access Token is required.");
+        throw new Error(
+          editingAccountId
+            ? "Enter the new Meta access token."
+            : "Access Token is required."
+        );
       }
 
       const response = await fetch("/api/whatsapp/accounts", {
@@ -130,26 +170,29 @@ export default function WhatsAppSettingsPage() {
 
       if (!response.ok) {
         throw new Error(
-          data?.message || "Failed to connect WhatsApp."
+          data?.message ||
+            (editingAccountId
+              ? "Failed to update WhatsApp access token."
+              : "Failed to connect WhatsApp.")
         );
       }
 
       setMessage(
-        data?.message || "WhatsApp account connected successfully."
+        data?.message ||
+          (editingAccountId
+            ? "WhatsApp access token updated successfully."
+            : "WhatsApp account connected successfully.")
       );
 
-      setPhoneNumberId("");
-      setBusinessAccountId("");
-      setAccessToken("");
-      setPhoneNumber("");
-      setDisplayName("");
-      setBranchId("");
+      resetForm();
 
       await loadData();
     } catch (err) {
       setError(
         err instanceof Error
           ? err.message
+          : editingAccountId
+          ? "Failed to update WhatsApp access token."
           : "Failed to connect WhatsApp."
       );
     } finally {
@@ -247,26 +290,39 @@ export default function WhatsAppSettingsPage() {
       {/* Connection form */}
       <div className="card">
         <div className="border-b border-slate-200 px-6 py-5">
-          <div className="flex items-center gap-3">
-            <PlugZap className="text-blue-600" size={21} />
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <PlugZap className="text-blue-600" size={21} />
 
-            <div>
-              <h2 className="font-semibold text-slate-900">
-                Connect WhatsApp
-              </h2>
+              <div>
+                <h2 className="font-semibold text-slate-900">
+                  {editingAccountId
+                    ? "Update WhatsApp Access Token"
+                    : "Connect WhatsApp"}
+                </h2>
 
-              <p className="mt-1 text-sm text-slate-500">
-                Enter the credentials provided by Meta for your WhatsApp
-                Business account.
-              </p>
+                <p className="mt-1 text-sm text-slate-500">
+                  {editingAccountId
+                    ? "Replace the Meta access token for this connected WhatsApp account."
+                    : "Enter the credentials provided by Meta for your WhatsApp Business account."}
+                </p>
+              </div>
             </div>
+
+            {editingAccountId && (
+              <button
+                type="button"
+                onClick={resetForm}
+                className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
+              >
+                <X size={16} />
+                Cancel
+              </button>
+            )}
           </div>
         </div>
 
-        <form
-          onSubmit={handleConnect}
-          className="space-y-6 p-6"
-        >
+        <form onSubmit={handleConnect} className="space-y-6 p-6">
           {/* Phone Number ID */}
           <div>
             <label
@@ -331,7 +387,11 @@ export default function WhatsAppSettingsPage() {
               onChange={(event) =>
                 setAccessToken(event.target.value)
               }
-              placeholder="Paste your Meta access token here"
+              placeholder={
+                editingAccountId
+                  ? "Paste your new permanent Meta access token here"
+                  : "Paste your Meta access token here"
+              }
               className="input min-h-[120px] resize-y font-mono text-xs"
               autoComplete="off"
               spellCheck={false}
@@ -428,10 +488,7 @@ export default function WhatsAppSettingsPage() {
                 </option>
 
                 {branches.map((branch) => (
-                  <option
-                    key={branch.id}
-                    value={branch.id}
-                  >
+                  <option key={branch.id} value={branch.id}>
                     {branch.name}
                   </option>
                 ))}
@@ -451,12 +508,22 @@ export default function WhatsAppSettingsPage() {
                     size={18}
                     className="animate-spin"
                   />
-                  Connecting...
+
+                  {editingAccountId
+                    ? "Updating..."
+                    : "Connecting..."}
                 </>
               ) : (
                 <>
-                  <MessageCircle size={18} />
-                  Connect WhatsApp
+                  {editingAccountId ? (
+                    <KeyRound size={18} />
+                  ) : (
+                    <MessageCircle size={18} />
+                  )}
+
+                  {editingAccountId
+                    ? "Update Access Token"
+                    : "Connect WhatsApp"}
                 </>
               )}
             </button>
@@ -519,8 +586,7 @@ export default function WhatsAppSettingsPage() {
         ) : (
           <div className="divide-y divide-slate-200">
             {accounts.map((account) => {
-              const connected =
-                account.status === "connected";
+              const connected = account.status === "connected";
 
               return (
                 <div
@@ -577,9 +643,7 @@ export default function WhatsAppSettingsPage() {
                         </p>
 
                         {account.phoneNumber && (
-                          <p>
-                            Phone: {account.phoneNumber}
-                          </p>
+                          <p>Phone: {account.phoneNumber}</p>
                         )}
 
                         {account.lastConnectedAt && (
@@ -603,31 +667,47 @@ export default function WhatsAppSettingsPage() {
                     </div>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() =>
-                      handleDisconnect(account.id)
-                    }
-                    disabled={
-                      disconnectingId === account.id
-                    }
-                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-red-200 px-4 py-2.5 text-sm font-semibold text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {disconnectingId === account.id ? (
-                      <>
-                        <Loader2
-                          size={17}
-                          className="animate-spin"
-                        />
-                        Disconnecting...
-                      </>
-                    ) : (
-                      <>
-                        <Trash2 size={17} />
-                        Disconnect
-                      </>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    {connected && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleEditAccount(account)
+                        }
+                        disabled={connecting}
+                        className="inline-flex items-center justify-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-4 py-2.5 text-sm font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <KeyRound size={17} />
+                        Update Access Token
+                      </button>
                     )}
-                  </button>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handleDisconnect(account.id)
+                      }
+                      disabled={
+                        disconnectingId === account.id
+                      }
+                      className="inline-flex items-center justify-center gap-2 rounded-xl border border-red-200 px-4 py-2.5 text-sm font-semibold text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {disconnectingId === account.id ? (
+                        <>
+                          <Loader2
+                            size={17}
+                            className="animate-spin"
+                          />
+                          Disconnecting...
+                        </>
+                      ) : (
+                        <>
+                          <Trash2 size={17} />
+                          Disconnect
+                        </>
+                      )}
+                    </button>
+                  </div>
                 </div>
               );
             })}
@@ -664,3 +744,4 @@ export default function WhatsAppSettingsPage() {
     </div>
   );
 }
+
