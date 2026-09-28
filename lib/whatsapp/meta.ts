@@ -105,7 +105,6 @@ export async function getWhatsAppPhoneNumber(
    ---------------------------------------------------------
    Sends a real WhatsApp text message through Meta Cloud API.
    ========================================================= */
-
 export async function sendWhatsAppText({
   phoneNumberId,
   accessToken,
@@ -153,11 +152,8 @@ export async function sendWhatsAppText({
     body: JSON.stringify({
       messaging_product: "whatsapp",
       recipient_type: "individual",
-
       to,
-
       type: "text",
-
       text: {
         preview_url: false,
         body: text,
@@ -167,19 +163,36 @@ export async function sendWhatsAppText({
     cache: "no-store",
   });
 
-  const data = await response.json();
+  let data: any = null;
+
+  try {
+    data = await response.json();
+  } catch {
+    data = null;
+  }
 
   if (!response.ok) {
-    console.error(
-      "Meta WhatsApp send message failed:",
-      data
-    );
+    const metaError = data?.error;
+
+    console.error("========== META WHATSAPP SEND ERROR ==========");
+    console.error("HTTP status:", response.status);
+    console.error("Error type:", metaError?.type);
+    console.error("Error code:", metaError?.code);
+    console.error("Error subcode:", metaError?.error_subcode);
+    console.error("Error message:", metaError?.message);
+    console.error("FB trace ID:", metaError?.fbtrace_id);
+    console.error("Full Meta response:", data);
+    console.error("==============================================");
 
     const message =
-      data?.error?.message ||
+      metaError?.message ||
       "Meta WhatsApp API request failed.";
 
-    throw new Error(message);
+    const error = new Error(
+      `Meta WhatsApp API error ${metaError?.code ?? response.status}: ${message}`
+    );
+
+    throw error;
   }
 
   return data as WhatsAppSendMessageResponse;
