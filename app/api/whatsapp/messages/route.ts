@@ -1,3 +1,4 @@
+
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireClinicUser } from "@/lib/auth-helpers";
@@ -162,6 +163,7 @@ export async function GET(request: Request) {
         branchId: patient.branchId,
 
         latestMessage: latestMessage?.text ?? "",
+
         latestMessageAt:
           latestMessage?.createdAt?.toISOString() ?? null,
 
@@ -303,11 +305,71 @@ export async function POST(request: Request) {
 
     /* =====================================================
        3. FIND CONNECTED WHATSAPP ACCOUNT
+       -----------------------------------------------------
+       For replies, ALWAYS prefer the WhatsApp account that
+       received the patient's existing conversation.
+
+       This prevents VisionFlow from accidentally replying
+       through another connected/old WhatsApp number.
        ===================================================== */
 
     let whatsappAccount = null;
 
-    if (effectiveBranchId) {
+    /* =====================================================
+       3A. FIND THE ACCOUNT USED BY THE PATIENT'S
+           MOST RECENT WHATSAPP MESSAGE
+       ===================================================== */
+
+    const latestPatientWhatsAppMessage =
+      await prisma.whatsAppMessage.findFirst({
+        where: {
+          clinicId,
+          patientId: patient.id,
+          whatsappAccountId: {
+            not: null,
+          },
+          ...(branchId ? { branchId } : {}),
+        },
+        orderBy: {
+          createdAt: "desc",
+        },
+        select: {
+          whatsappAccountId: true,
+        },
+      });
+
+    /* =====================================================
+       3B. LOAD THAT EXACT WHATSAPP ACCOUNT
+       ===================================================== */
+
+    if (
+      latestPatientWhatsAppMessage?.whatsappAccountId
+    ) {
+      whatsappAccount =
+        await prisma.whatsAppAccount.findFirst({
+          where: {
+            id:
+              latestPatientWhatsAppMessage.whatsappAccountId,
+            clinicId,
+            status: "connected",
+            accessTokenEncrypted: {
+              not: null,
+            },
+            phoneNumberId: {
+              not: null,
+            },
+          },
+        });
+    }
+
+    /* =====================================================
+       3C. FALLBACK TO BRANCH ACCOUNT
+       -----------------------------------------------------
+       Used when there is no previous WhatsApp message
+       associated with a WhatsApp account.
+       ===================================================== */
+
+    if (!whatsappAccount && effectiveBranchId) {
       whatsappAccount =
         await prisma.whatsAppAccount.findFirst({
           where: {
@@ -322,10 +384,14 @@ export async function POST(request: Request) {
             },
           },
           orderBy: {
-            createdAt: "desc",
+            updatedAt: "desc",
           },
         });
     }
+
+    /* =====================================================
+       3D. FINAL FALLBACK TO CLINIC-WIDE ACCOUNT
+       ===================================================== */
 
     if (!whatsappAccount) {
       whatsappAccount =
@@ -342,21 +408,42 @@ export async function POST(request: Request) {
             },
           },
           orderBy: {
-            createdAt: "desc",
+            updatedAt: "desc",
           },
         });
     }
+
+    /* =====================================================
+       3E. MAKE SURE AN ACCOUNT WAS FOUND
+       ===================================================== */
 
     if (!whatsappAccount) {
       return NextResponse.json(
         {
           success: false,
           message:
-            "No connected WhatsApp account is available for this clinic or branch.",
+            "No connected WhatsApp account is available for this clinic.",
         },
         { status: 400 }
       );
     }
+
+    /* =====================================================
+       SAFE DIAGNOSTIC LOG
+       -----------------------------------------------------
+       IMPORTANT:
+       Never log the access token.
+       ===================================================== */
+
+    console.log(
+      "WhatsApp outbound account selected:",
+      {
+        accountId: whatsappAccount.id,
+        phoneNumberId: whatsappAccount.phoneNumberId,
+        clinicId: whatsappAccount.clinicId,
+        branchId: whatsappAccount.branchId,
+      }
+    );
 
     /* =====================================================
        4. CHECK REQUIRED CREDENTIALS
@@ -613,3 +700,4 @@ export async function POST(request: Request) {
     );
   }
 }
+
