@@ -15,17 +15,19 @@ import {
 
 export const runtime = "nodejs";
 
-function normalize(
-  value: unknown
-): string {
+/**
+ * =========================================================
+ * HELPERS
+ * =========================================================
+ */
+
+function normalize(value: unknown): string {
   return typeof value === "string"
     ? value.trim()
     : "";
 }
 
-function isClinicAdmin(
-  role: string
-): boolean {
+function isClinicAdmin(role: string): boolean {
   return role === UserRole.CLINIC_ADMIN;
 }
 
@@ -34,15 +36,17 @@ function isClinicAdmin(
  * GET
  * =========================================================
  *
- * Returns connected WhatsApp accounts.
+ * Returns all WhatsApp account records belonging to the
+ * current clinic.
  *
  * IMPORTANT:
- * Access tokens are NEVER returned.
+ * - Access tokens are NEVER returned.
+ * - Disconnected historical records may still be returned.
+ * - Only one account should normally have status "connected".
  */
 export async function GET() {
   try {
-    const user =
-      await requireClinicUser();
+    const user = await requireClinicUser();
 
     if (!isClinicAdmin(user.role)) {
       return NextResponse.json(
@@ -60,6 +64,7 @@ export async function GET() {
         where: {
           clinicId: user.clinicId,
         },
+
         select: {
           id: true,
           clinicId: true,
@@ -83,6 +88,7 @@ export async function GET() {
             },
           },
         },
+
         orderBy: {
           createdAt: "desc",
         },
@@ -114,27 +120,45 @@ export async function GET() {
  * POST
  * =========================================================
  *
- * Connects a Meta WhatsApp Cloud API account.
+ * Connect or reconnect a Meta WhatsApp Cloud API account.
+ *
+ * CURRENT MVP RULE:
+ *
+ * One clinic = ONE connected WhatsApp account.
+ *
+ * Therefore:
+ *
+ * 1. If the clinic has no connected account:
+ *    -> create the account.
+ *
+ * 2. If the clinic already has the SAME phoneNumberId:
+ *    -> update/reconnect the existing account.
+ *
+ * 3. If the clinic already has a DIFFERENT connected account:
+ *    -> reject with HTTP 409.
+ *
+ * Disconnected historical accounts do not prevent a new
+ * connected account from being created.
  *
  * Required:
- *
- * phoneNumberId
- * accessToken
+ * - phoneNumberId
+ * - accessToken
  *
  * Optional:
- *
- * businessAccountId
- * phoneNumber
- * displayName
- * branchId
+ * - businessAccountId
+ * - phoneNumber
+ * - displayName
+ * - branchId
  */
-export async function POST(
-  request: Request
-) {
+export async function POST(request: Request) {
   try {
-    const user =
-      await requireClinicUser();
+    const user = await requireClinicUser();
 
+    /**
+     * -------------------------------------------------------
+     * Clinic administrator only
+     * -------------------------------------------------------
+     */
     if (!isClinicAdmin(user.role)) {
       return NextResponse.json(
         {
@@ -146,8 +170,12 @@ export async function POST(
       );
     }
 
-    const body =
-      await request.json();
+    /**
+     * -------------------------------------------------------
+     * Parse request body
+     * -------------------------------------------------------
+     */
+    const body = await request.json();
 
     const phoneNumberId =
       normalize(body.phoneNumberId);
@@ -156,9 +184,7 @@ export async function POST(
       normalize(body.accessToken);
 
     const businessAccountId =
-      normalize(
-        body.businessAccountId
-      );
+      normalize(body.businessAccountId);
 
     const suppliedPhoneNumber =
       normalize(body.phoneNumber);
@@ -169,6 +195,11 @@ export async function POST(
     const branchId =
       normalize(body.branchId);
 
+    /**
+     * -------------------------------------------------------
+     * Validate required fields
+     * -------------------------------------------------------
+     */
     if (!phoneNumberId) {
       return NextResponse.json(
         {
@@ -195,6 +226,9 @@ export async function POST(
      * -------------------------------------------------------
      * Global webhook verification token
      * -------------------------------------------------------
+     *
+     * This is the server-side verification token used by
+     * Meta when verifying the webhook.
      */
     const verifyToken =
       process.env.WHATSAPP_VERIFY_TOKEN?.trim();
@@ -214,6 +248,11 @@ export async function POST(
      * -------------------------------------------------------
      * Validate branch
      * -------------------------------------------------------
+     *
+     * branchId is optional.
+     *
+     * If supplied, it must belong to the current clinic
+     * and must be active.
      */
     let validatedBranchId:
       | string
@@ -227,6 +266,7 @@ export async function POST(
             clinicId: user.clinicId,
             isActive: true,
           },
+
           select: {
             id: true,
           },
@@ -243,14 +283,22 @@ export async function POST(
         );
       }
 
-      validatedBranchId =
-        branch.id;
+      validatedBranchId = branch.id;
     }
 
     /**
      * -------------------------------------------------------
-     * Verify credentials directly with Meta
+     * Verify the Phone Number directly with Meta
      * -------------------------------------------------------
+     *
+     * This confirms that:
+     *
+     * - phoneNumberId exists
+     * - accessToken is valid
+     * - Meta allows the token to access this number
+     *
+     * IMPORTANT:
+     * Never log the access token.
      */
     const metaPhone =
       await getWhatsAppPhoneNumber(
@@ -260,22 +308,33 @@ export async function POST(
 
     /**
      * -------------------------------------------------------
-     * Prevent cross-tenant account ownership
+     * Find an existing record for this phone number
      * -------------------------------------------------------
+     *
+     * phoneNumberId is globally unique in Prisma.
      */
     const existing =
-      await prisma.whatsAppAccount.findUnique(
-        {
-          where: {
-            phoneNumberId,
-          },
-          select: {
-            id: true,
-            clinicId: true,
-          },
-        }
-      );
+      await prisma.whatsAppAccount.findUnique({
+        where: {
+          phoneNumberId,
+        },
 
+        select: {
+          id: true,
+          clinicId: true,
+          status: true,
+          phoneNumberId: true,
+        },
+      });
+
+    /**
+     * -------------------------------------------------------
+     * Prevent cross-clinic ownership
+     * -------------------------------------------------------
+     *
+     * A WhatsApp phone number must never be silently moved
+     * from one clinic to another.
+     */
     if (
       existing &&
       existing.clinicId !== user.clinicId
@@ -292,8 +351,80 @@ export async function POST(
 
     /**
      * -------------------------------------------------------
-     * Encrypt access token
+     * ONE CLINIC = ONE CONNECTED WHATSAPP ACCOUNT
      * -------------------------------------------------------
+     *
+     * Check whether this clinic already has another
+     * connected account.
+     *
+     * We only check status = "connected".
+     *
+     * Therefore disconnected historical accounts do not
+     * block the clinic from connecting a new number.
+     */
+    const connectedAccount =
+      await prisma.whatsAppAccount.findFirst({
+        where: {
+          clinicId: user.clinicId,
+          status: "connected",
+          accessTokenEncrypted: {
+            not: null,
+          },
+          phoneNumberId: {
+            not: null,
+          },
+
+          /**
+           * If an existing record represents the same
+           * phone number, it is allowed to reconnect/update.
+           *
+           * If it is a different phone number, the clinic
+           * already has its one allowed connected account.
+           */
+          ...(existing
+            ? {
+                id: {
+                  not: existing.id,
+                },
+              }
+            : {}),
+        },
+
+        select: {
+          id: true,
+          phoneNumber: true,
+          displayName: true,
+          phoneNumberId: true,
+          status: true,
+        },
+
+        orderBy: {
+          updatedAt: "desc",
+        },
+      });
+
+    /**
+     * -------------------------------------------------------
+     * Reject second connected account
+     * -------------------------------------------------------
+     */
+    if (connectedAccount) {
+      return NextResponse.json(
+        {
+          success: false,
+          message:
+            "Your clinic already has a connected WhatsApp account. Please disconnect the existing WhatsApp account before connecting another number.",
+        },
+        { status: 409 }
+      );
+    }
+
+    /**
+     * -------------------------------------------------------
+     * Encrypt sensitive credentials
+     * -------------------------------------------------------
+     *
+     * The raw access token is NEVER stored.
      */
     const accessTokenEncrypted =
       encryptSecret(accessToken);
@@ -301,6 +432,11 @@ export async function POST(
     const verifyTokenHash =
       hashVerifyToken(verifyToken);
 
+    /**
+     * -------------------------------------------------------
+     * Resolve account information
+     * -------------------------------------------------------
+     */
     const phoneNumber =
       suppliedPhoneNumber ||
       metaPhone.display_phone_number ||
@@ -313,87 +449,119 @@ export async function POST(
 
     /**
      * -------------------------------------------------------
-     * Create / update account
+     * Create / update WhatsApp account
      * -------------------------------------------------------
+     *
+     * Existing record:
+     * - reconnect
+     * - refresh token
+     * - refresh metadata
+     * - set status connected
+     *
+     * No existing record:
+     * - create new account
      */
-    const account =
-      existing
-        ? await prisma.whatsAppAccount.update(
-            {
-              where: {
-                id: existing.id,
-              },
-              data: {
-                branchId:
-                  validatedBranchId,
-                provider:
-                  "meta_cloud_api",
-                phoneNumber,
-                displayName,
-                businessAccountId:
-                  businessAccountId ||
-                  undefined,
-                accessTokenEncrypted,
-                verifyTokenHash,
-                status: "connected",
-                lastConnectedAt:
-                  new Date(),
-              },
-              select: {
-                id: true,
-                clinicId: true,
-                branchId: true,
-                provider: true,
-                phoneNumber: true,
-                displayName: true,
-                phoneNumberId: true,
-                businessAccountId: true,
-                status: true,
-                lastConnectedAt: true,
-                lastWebhookAt: true,
-                createdAt: true,
-                updatedAt: true,
-              },
-            }
-          )
-        : await prisma.whatsAppAccount.create(
-            {
-              data: {
-                clinicId:
-                  user.clinicId,
-                branchId:
-                  validatedBranchId,
-                provider:
-                  "meta_cloud_api",
-                phoneNumber,
-                displayName,
-                phoneNumberId,
-                businessAccountId:
-                  businessAccountId ||
-                  null,
-                accessTokenEncrypted,
-                verifyTokenHash,
-                status: "connected",
-                lastConnectedAt:
-                  new Date(),
-              },
-              select: {
-                id: true,
-                clinicId: true,
-                branchId: true,
-                provider: true,
-                phoneNumber: true,
-                displayName: true,
-                phoneNumberId: true,
-                businessAccountId: true,
-                status: true,
-                lastConnectedAt: true,
-                lastWebhookAt: true,
-                createdAt: true,
-                updatedAt: true,
-              },
-            }
-          );
+    const account = existing
+      ? await prisma.whatsAppAccount.update({
+          where: {
+            id: existing.id,
+          },
+
+          data: {
+            clinicId:
+              user.clinicId,
+
+            branchId:
+              validatedBranchId,
+
+            provider:
+              "meta_cloud_api",
+
+            phoneNumber,
+
+            displayName,
+
+            phoneNumberId,
+
+            businessAccountId:
+              businessAccountId ||
+              undefined,
+
+            accessTokenEncrypted,
+
+            verifyTokenHash,
+
+            status:
+              "connected",
+
+            lastConnectedAt:
+              new Date(),
+          },
+
+          select: {
+            id: true,
+            clinicId: true,
+            branchId: true,
+            provider: true,
+            phoneNumber: true,
+            displayName: true,
+            phoneNumberId: true,
+            businessAccountId: true,
+            status: true,
+            lastConnectedAt: true,
+            lastWebhookAt: true,
+            createdAt: true,
+            updatedAt: true,
+          },
+        })
+      : await prisma.whatsAppAccount.create({
+          data: {
+            clinicId:
+              user.clinicId,
+
+            branchId:
+              validatedBranchId,
+
+            provider:
+              "meta_cloud_api",
+
+            phoneNumber,
+
+            displayName,
+
+            phoneNumberId,
+
+            businessAccountId:
+              businessAccountId ||
+              null,
+
+            accessTokenEncrypted,
+
+            verifyTokenHash,
+
+            status:
+              "connected",
+
+            lastConnectedAt:
+              new Date(),
+          },
+
+          select: {
+            id: true,
+            clinicId: true,
+            branchId: true,
+            provider: true,
+            phoneNumber: true,
+            displayName: true,
+            phoneNumberId: true,
+            businessAccountId: true,
+            status: true,
+            lastConnectedAt: true,
+            lastWebhookAt: true,
+            createdAt: true,
+            updatedAt: true,
+          },
+        });
 
     /**
      * -------------------------------------------------------
@@ -404,16 +572,21 @@ export async function POST(
       data: {
         clinicId:
           user.clinicId,
+
         userId:
           user.id,
+
         action:
           existing
             ? "UPDATE"
             : "CREATE",
+
         entity:
           "WhatsAppAccount",
+
         entityId:
           account.id,
+
         description:
           existing
             ? `WhatsApp account ${phoneNumberId} was reconnected.`
@@ -421,15 +594,23 @@ export async function POST(
       },
     });
 
+    /**
+     * -------------------------------------------------------
+     * Response
+     * -------------------------------------------------------
+     *
+     * No access token is returned.
+     */
     return NextResponse.json(
       {
         success: true,
         account,
       },
       {
-        status: existing
-          ? 200
-          : 201,
+        status:
+          existing
+            ? 200
+            : 201,
       }
     );
   } catch (error) {
@@ -450,3 +631,4 @@ export async function POST(
     );
   }
 }
+

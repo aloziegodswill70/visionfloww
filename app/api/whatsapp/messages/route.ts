@@ -1,4 +1,3 @@
-
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireClinicUser } from "@/lib/auth-helpers";
@@ -203,6 +202,18 @@ export async function GET(request: Request) {
    POST
    ---------------------------------------------------------
    Send a REAL WhatsApp message through Meta Cloud API.
+
+   CURRENT VISIONFLOW RULE:
+   ---------------------------------------------------------
+   ONE CLINIC = ONE CONNECTED WHATSAPP ACCOUNT
+
+   We deliberately do not select an account based on:
+   - patient history
+   - branch
+   - latest message
+   - createdAt
+
+   The clinic must have exactly one connected account.
    ========================================================= */
 
 export async function POST(request: Request) {
@@ -236,6 +247,10 @@ export async function POST(request: Request) {
         ? body.text.trim()
         : "";
 
+    /* =====================================================
+       VALIDATE PATIENT ID
+       ===================================================== */
+
     if (!patientId) {
       return NextResponse.json(
         {
@@ -245,6 +260,10 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
+
+    /* =====================================================
+       VALIDATE MESSAGE TEXT
+       ===================================================== */
 
     if (!text) {
       return NextResponse.json(
@@ -268,7 +287,14 @@ export async function POST(request: Request) {
     }
 
     /* =====================================================
-       1. FIND PATIENT WITH TENANT + BRANCH ISOLATION
+       1. FIND PATIENT
+       -----------------------------------------------------
+       Tenant isolation is mandatory.
+
+       A clinic user can only send messages to patients
+       belonging to their own clinic.
+
+       Branch isolation is also preserved for branch users.
        ===================================================== */
 
     const patient = await prisma.patient.findFirst({
@@ -297,156 +323,126 @@ export async function POST(request: Request) {
     }
 
     /* =====================================================
-       2. DETERMINE THE BRANCH TO USE
+       2. DETERMINE MESSAGE BRANCH
        ===================================================== */
 
     const effectiveBranchId =
       patient.branchId ?? branchId ?? null;
 
     /* =====================================================
-       3. FIND CONNECTED WHATSAPP ACCOUNT
+       3. FIND THE CLINIC'S CONNECTED WHATSAPP ACCOUNT
        -----------------------------------------------------
-       For replies, ALWAYS prefer the WhatsApp account that
-       received the patient's existing conversation.
+       CURRENT RULE:
 
-       This prevents VisionFlow from accidentally replying
-       through another connected/old WhatsApp number.
+       ONE CLINIC = ONE CONNECTED WHATSAPP ACCOUNT
+
+       We intentionally do not select:
+       - latest account
+       - branch account
+       - patient account
+       - account from previous message
+
+       This prevents an old connected Meta account from
+       accidentally being used.
        ===================================================== */
 
-    let whatsappAccount = null;
-
-    /* =====================================================
-       3A. FIND THE ACCOUNT USED BY THE PATIENT'S
-           MOST RECENT WHATSAPP MESSAGE
-       ===================================================== */
-
-    const latestPatientWhatsAppMessage =
-      await prisma.whatsAppMessage.findFirst({
+    const connectedWhatsAppAccounts =
+      await prisma.whatsAppAccount.findMany({
         where: {
           clinicId,
-          patientId: patient.id,
-          whatsappAccountId: {
+          status: "connected",
+          accessTokenEncrypted: {
             not: null,
           },
-          ...(branchId ? { branchId } : {}),
+          phoneNumberId: {
+            not: null,
+          },
         },
         orderBy: {
-          createdAt: "desc",
-        },
-        select: {
-          whatsappAccountId: true,
+          updatedAt: "desc",
         },
       });
 
     /* =====================================================
-       3B. LOAD THAT EXACT WHATSAPP ACCOUNT
+       3A. NO CONNECTED ACCOUNT
        ===================================================== */
 
-    if (
-      latestPatientWhatsAppMessage?.whatsappAccountId
-    ) {
-      whatsappAccount =
-        await prisma.whatsAppAccount.findFirst({
-          where: {
-            id:
-              latestPatientWhatsAppMessage.whatsappAccountId,
-            clinicId,
-            status: "connected",
-            accessTokenEncrypted: {
-              not: null,
-            },
-            phoneNumberId: {
-              not: null,
-            },
-          },
-        });
-    }
-
-    /* =====================================================
-       3C. FALLBACK TO BRANCH ACCOUNT
-       -----------------------------------------------------
-       Used when there is no previous WhatsApp message
-       associated with a WhatsApp account.
-       ===================================================== */
-
-    if (!whatsappAccount && effectiveBranchId) {
-      whatsappAccount =
-        await prisma.whatsAppAccount.findFirst({
-          where: {
-            clinicId,
-            branchId: effectiveBranchId,
-            status: "connected",
-            accessTokenEncrypted: {
-              not: null,
-            },
-            phoneNumberId: {
-              not: null,
-            },
-          },
-          orderBy: {
-            updatedAt: "desc",
-          },
-        });
-    }
-
-    /* =====================================================
-       3D. FINAL FALLBACK TO CLINIC-WIDE ACCOUNT
-       ===================================================== */
-
-    if (!whatsappAccount) {
-      whatsappAccount =
-        await prisma.whatsAppAccount.findFirst({
-          where: {
-            clinicId,
-            branchId: null,
-            status: "connected",
-            accessTokenEncrypted: {
-              not: null,
-            },
-            phoneNumberId: {
-              not: null,
-            },
-          },
-          orderBy: {
-            updatedAt: "desc",
-          },
-        });
-    }
-
-    /* =====================================================
-       3E. MAKE SURE AN ACCOUNT WAS FOUND
-       ===================================================== */
-
-    if (!whatsappAccount) {
+    if (connectedWhatsAppAccounts.length === 0) {
       return NextResponse.json(
         {
           success: false,
           message:
-            "No connected WhatsApp account is available for this clinic.",
+            "No connected WhatsApp account is available for this clinic. Connect a WhatsApp account before sending messages.",
         },
         { status: 400 }
       );
     }
 
     /* =====================================================
+       3B. MORE THAN ONE CONNECTED ACCOUNT
+       -----------------------------------------------------
+       We deliberately refuse to guess.
+
+       This is important because selecting an arbitrary
+       account can cause Meta authentication errors or send
+       a message from the wrong WhatsApp number.
+       ===================================================== */
+
+    if (connectedWhatsAppAccounts.length > 1) {
+      console.error(
+        "Multiple connected WhatsApp accounts detected for clinic:",
+        {
+          clinicId,
+          accounts: connectedWhatsAppAccounts.map(
+            (account) => ({
+              id: account.id,
+              phoneNumberId: account.phoneNumberId,
+              branchId: account.branchId,
+              status: account.status,
+            })
+          ),
+        }
+      );
+
+      return NextResponse.json(
+        {
+          success: false,
+          message:
+            "Multiple connected WhatsApp accounts were found for this clinic. Please disconnect the extra WhatsApp account before sending messages.",
+        },
+        { status: 409 }
+      );
+    }
+
+    /* =====================================================
+       3C. USE THE SINGLE CONNECTED ACCOUNT
+       ===================================================== */
+
+    const whatsappAccount =
+      connectedWhatsAppAccounts[0];
+
+    /* =====================================================
        SAFE DIAGNOSTIC LOG
        -----------------------------------------------------
-       IMPORTANT:
-       Never log the access token.
+       NEVER log:
+       - accessToken
+       - decrypted token
+       - encrypted token
        ===================================================== */
 
     console.log(
       "WhatsApp outbound account selected:",
       {
         accountId: whatsappAccount.id,
-        phoneNumberId: whatsappAccount.phoneNumberId,
+        phoneNumberId:
+          whatsappAccount.phoneNumberId,
         clinicId: whatsappAccount.clinicId,
         branchId: whatsappAccount.branchId,
       }
     );
 
     /* =====================================================
-       4. CHECK REQUIRED CREDENTIALS
+       4. CHECK PHONE NUMBER ID
        ===================================================== */
 
     if (!whatsappAccount.phoneNumberId) {
@@ -460,6 +456,10 @@ export async function POST(request: Request) {
       );
     }
 
+    /* =====================================================
+       5. CHECK ENCRYPTED ACCESS TOKEN
+       ===================================================== */
+
     if (!whatsappAccount.accessTokenEncrypted) {
       return NextResponse.json(
         {
@@ -472,7 +472,7 @@ export async function POST(request: Request) {
     }
 
     /* =====================================================
-       5. NORMALIZE PATIENT WHATSAPP NUMBER
+       6. NORMALIZE PATIENT WHATSAPP NUMBER
        ===================================================== */
 
     const normalizedPhone =
@@ -490,7 +490,7 @@ export async function POST(request: Request) {
     }
 
     /* =====================================================
-       6. DECRYPT META ACCESS TOKEN
+       7. DECRYPT META ACCESS TOKEN
        ===================================================== */
 
     let accessToken: string;
@@ -516,14 +516,15 @@ export async function POST(request: Request) {
     }
 
     /* =====================================================
-       7. SEND THROUGH META CLOUD API
+       8. SEND THROUGH META CLOUD API
        ===================================================== */
 
     let metaResponse;
 
     try {
       metaResponse = await sendWhatsAppText({
-        phoneNumberId: whatsappAccount.phoneNumberId,
+        phoneNumberId:
+          whatsappAccount.phoneNumberId,
         accessToken,
         to: normalizedPhone,
         text,
@@ -533,6 +534,10 @@ export async function POST(request: Request) {
         "Meta WhatsApp message send failed:",
         error
       );
+
+      /* =================================================
+         SAVE FAILED EXECUTION LOG
+         ================================================= */
 
       try {
         await prisma.executionLog.create({
@@ -568,7 +573,7 @@ export async function POST(request: Request) {
     }
 
     /* =====================================================
-       8. EXTRACT META MESSAGE ID
+       9. EXTRACT META MESSAGE ID
        ===================================================== */
 
     const metaMessageId =
@@ -579,6 +584,10 @@ export async function POST(request: Request) {
         "Meta WhatsApp API returned no message ID:",
         metaResponse
       );
+
+      /* =================================================
+         SAVE FAILED EXECUTION LOG
+         ================================================= */
 
       try {
         await prisma.executionLog.create({
@@ -610,7 +619,7 @@ export async function POST(request: Request) {
     }
 
     /* =====================================================
-       9. SAVE OUTGOING MESSAGE
+       10. SAVE OUTGOING MESSAGE
        ===================================================== */
 
     const savedMessage =
@@ -647,7 +656,7 @@ export async function POST(request: Request) {
       });
 
     /* =====================================================
-       10. CREATE EXECUTION LOG
+       11. CREATE SUCCESS EXECUTION LOG
        ===================================================== */
 
     try {
@@ -669,7 +678,7 @@ export async function POST(request: Request) {
     }
 
     /* =====================================================
-       11. RETURN SUCCESS
+       12. RETURN SUCCESS
        ===================================================== */
 
     return NextResponse.json({
